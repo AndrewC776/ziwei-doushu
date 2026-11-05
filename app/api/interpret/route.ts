@@ -1,30 +1,19 @@
 /**
- * 命理解读接口 —— 本地样本优先，未命中回落大模型
- *
- * 开源版未包含 app/api，此路由为自行实现。
- * 前端契约（components/InsightPanel.tsx / ChatPanel.tsx）：
- *   POST /api/interpret  body: { chart, messages: [{role, content}] }
- *   响应：SSE，每行 `data: {"delta":{"text":"..."}}`，结束发 `data: [DONE]`
- *
- * 策略：
- *   1) 生日落在本地 51.8 万样本覆盖范围内 → 直接取现成解读（零成本、毫秒级）
- *   2) 超出范围，或本地主题匹配不上的追问 → 调 OpenAI 兼容大模型
+ * 命理解读：优先查询本地 v4 数据；自由追问可按现有配置调用模型。
+ * POST body: { chart, messages, topic? }; 响应使用 SSE，结束发送 [DONE]。
+ * 无效日期、超出范围或数据缺失时返回明确提示。
  */
 
 import { NextRequest } from 'next/server';
-import fs from 'node:fs';
 import path from 'node:path';
-import { createReadStream } from 'node:fs';
-import { createGunzip } from 'node:zlib';
-import { createInterface } from 'node:readline';
+import { validBirth, findLocalSample, TOPICS } from '@/lib/v4-lookup';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 // Vercel 函数默认超时偏短，AI 流式输出较长，放宽到 60 秒
 export const maxDuration = 60;
 
-// 样本目录：ziwei-doushu 同级 ziwei-samples-toolkit/samples-out
-const SAMPLES_DIR = path.resolve(process.cwd(), '..', 'ziwei-samples-toolkit', 'samples-out');
+const DATA_DIR = process.env.ZIWEI_V4_DIR || path.join(process.cwd(), 'data', 'v4-ready');
 
 const TOPIC_LABELS: Record<string, string> = {
   overview: '命格总览',
@@ -65,49 +54,6 @@ type BirthInfo = {
   gender: 'male' | 'female';
   longitude?: number;
 };
-
-/** 样本在分片内的行号：(日-1)*24 + 时辰*2 + (女?1:0) */
-function rowIndex(day: number, hour: number, gender: string): number {
-  return (day - 1) * 24 + hour * 2 + (gender === 'female' ? 1 : 0);
-}
-
-function inSampleRange(b?: BirthInfo | null): boolean {
-  return !!b && b.year >= 1924 && b.year <= 1983 && b.month >= 1 && b.month <= 12 && b.day >= 1 && b.day <= 30 && b.hour >= 0 && b.hour <= 11;
-}
-
-/** 流式读取 .jsonl.gz，取第 target 行并解析（不会整体解压） */
-async function readSampleLine(file: string, target: number): Promise<any | null> {
-  if (!fs.existsSync(file)) return null;
-  const rl = createInterface({
-    input: createReadStream(file).pipe(createGunzip()),
-    crlfDelay: Infinity,
-  });
-  let i = 0;
-  try {
-    for await (const line of rl) {
-      if (!line) continue;
-      if (i === target) {
-        rl.close();
-        return JSON.parse(line);
-      }
-      i++;
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-async function findLocalSample(b: BirthInfo): Promise<any | null> {
-  const mm = String(b.month).padStart(2, '0');
-  const file = path.join(SAMPLES_DIR, `year-${b.year}`, `${b.year}-${mm}.jsonl.gz`);
-  const row = await readSampleLine(file, rowIndex(b.day, b.hour, b.gender));
-  // 校验读到的是不是我们要的那条
-  if (row?.birthInfo && row.birthInfo.day === b.day && row.birthInfo.hour === b.hour && row.birthInfo.gender === b.gender) {
-    return row;
-  }
-  return null;
-}
 
 function matchTopic(text: string): string | null {
   for (const [topic, kws] of TOPIC_KEYWORDS) {
@@ -214,8 +160,13 @@ export async function POST(req: NextRequest) {
     return new Response(JSON.stringify({ error: '请求体解析失败' }), { status: 400 });
   }
 
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return new Response(JSON.stringify({ error: '请求体格式无效' }), { status: 400 });
+  if (body.topic !== undefined && (typeof body.topic !== 'string' || !TOPICS.includes(body.topic))) {
+    return new Response(JSON.stringify({ error: '无效的主题' }), { status: 400 });
+  }
+  const requestedTopic: string | undefined = body.topic;
   const chart = body.chart;
-  const messages: { role: string; content: string }[] = Array.isArray(body.messages) ? body.messages : [];
+  const messages: { role: string; content: string }[] = Array.isArray(body.messages) ? body.messages.filter((m: any) => m && ['user', 'assistant'].includes(m.role) && typeof m.content === 'string').slice(-20) : [];
   const birth: BirthInfo | undefined = chart?.birthInfo;
 
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
@@ -229,12 +180,16 @@ export async function POST(req: NextRequest) {
       const sendNote = (t: string) => send(t);
       try {
         let handled = false;
+        let generatedByModel = false;
 
-        if (inSampleRange(birth)) {
-          const sample = await findLocalSample(birth as BirthInfo);
-          if (sample?.topics) {
-            const topics = sample.topics as Record<string, string>;
-            if (isFirst) {
+        if (validBirth(birth)) {
+          const topics = await findLocalSample(birth as BirthInfo, DATA_DIR);
+          if (!topics) { send('本地 v4 数据缺少该出生信息的记录，请重新准备数据。'); return; }
+          if (topics) {
+            if (requestedTopic) {
+              await streamLocalText(topics[requestedTopic], send);
+              handled = true;
+            } else if (isFirst && !matchTopic(question)) {
               await streamLocalText(topics.overview || '', send);
               handled = true;
             } else {
@@ -258,28 +213,18 @@ export async function POST(req: NextRequest) {
                   send,
                 );
                 handled = true;
+                generatedByModel = true;
               }
             }
-            if (handled) sendNote('\n\n---\n*（本条解读来自本地 51.8 万样本库，与 metisziwei.com 口径一致）*');
+            if (handled) sendNote(generatedByModel ? '\n\n---\n*（此回答由模型基于本地 v4 资料生成）*' : '\n\n---\n*（本条解读来自本地 v4 样本库）*');
           }
         }
 
         if (!handled) {
-          const note = inSampleRange(birth)
-            ? '（本地样本未命中，转由大模型解读）\n\n'
-            : '（该生日不在本地样本库覆盖范围 1924–1983 年，转由大模型解读）\n\n';
-          sendNote(note);
-          await streamFromLLM(
-            [
-              { role: 'system', content: SYSTEM_PROMPT },
-              ...messages.slice(-8).map((m) => ({ role: m.role, content: m.content })),
-              { role: 'user', content: `请基于以下命盘作答：\n${chartToText(chart)}\n\n问题：${question || '请给出命格总览'}` },
-            ],
-            send,
-          );
+          send('出生信息无效或不在本地 v4 数据覆盖范围 1950–2026 年。');
         }
       } catch (err: any) {
-        send(`\n\n解读失败：${err?.message || '未知错误'}\n请检查 .env.local 里的 MODEL_BASE_URL / MODEL_API_KEY / MODEL_DEFAULT 配置。`);
+        send(`\n\n解读失败：${err?.message || '未知错误'}`);
       } finally {
         controller.enqueue(encoder.encode('data: [DONE]\n\n'));
         controller.close();

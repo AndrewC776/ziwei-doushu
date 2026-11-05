@@ -29,6 +29,13 @@ const TOPICS = [
   { key: 'wealth',      label: '财运' },
   { key: 'health',      label: '健康' },
   { key: 'personality', label: '性格' },
+  { key: 'family', label: '家庭' },
+  { key: 'children', label: '子女' },
+  { key: 'move', label: '迁移' },
+  { key: 'friends', label: '人际' },
+  { key: 'home', label: '田宅' },
+  { key: 'spirit', label: '福德' },
+  { key: 'parents', label: '父母' },
 ] as const;
 
 const TOPIC_PROMPTS: Record<string, string> = {
@@ -209,7 +216,7 @@ export default function InsightPanel({ chart, selectedPalace, selectedSiHua }: I
   useEffect(() => {
     if (autoLoaded.current) return;
     autoLoaded.current = true;
-    sendMessage(TOPIC_PROMPTS.overview, true);
+    sendMessage(TOPIC_PROMPTS.overview, true, 'overview');
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Inject palace analysis when palace selected
@@ -274,12 +281,12 @@ ${selectedSiHua.starName}化${selectedSiHua.siHua}落在【${palaceName}】，�
     sendMessage(prompt, true);
   }, [selectedSiHua]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const streamResponse = async (apiMessages: { role: 'user' | 'assistant'; content: string }[]) => {
+  const streamResponse = async (apiMessages: { role: 'user' | 'assistant'; content: string }[], topic?: string) => {
     try {
       const res = await fetch('/api/interpret', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chart, messages: apiMessages }),
+        body: JSON.stringify({ chart, messages: apiMessages, topic }),
       });
       if (!res.ok) throw new Error('请求失败');
       if (!res.body) throw new Error('无响应流');
@@ -317,7 +324,7 @@ ${selectedSiHua.starName}化${selectedSiHua.siHua}落在【${palaceName}】，�
     }
   };
 
-  const sendMessage = (text: string, hidden = false) => {
+  const sendMessage = (text: string, hidden = false, topic?: string) => {
     if (!text.trim() || loadingRef.current) return;
     loadingRef.current = true;
     setLoading(true);
@@ -331,13 +338,13 @@ ${selectedSiHua.starName}化${selectedSiHua.siHua}落在【${palaceName}】，�
 
     setMessages(prev => [...prev, userMsg]);
     setInput('');
-    streamResponse(apiMessages);
+    streamResponse(apiMessages, topic);
   };
 
   const handleTopicClick = (topicKey: string) => {
     if (loadingRef.current) return;
     setActiveTopic(topicKey);
-    sendMessage(TOPIC_PROMPTS[topicKey], true);
+    sendMessage(TOPIC_PROMPTS[topicKey] || `请分析${TOPICS.find(t => t.key === topicKey)?.label || topicKey}`, true, topicKey);
   };
 
   const handleSend = () => {

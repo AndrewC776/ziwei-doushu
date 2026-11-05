@@ -6,3 +6,11 @@ node_modules/
 dist/
 *.tsbuildinfo
 .DS_Store
+
+/data/
+!/scripts/
+!/scripts/prepare-v4.py
+!/scripts/v4-compress.cjs
+
+__pycache__/
+*.pyc
