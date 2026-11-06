@@ -6,6 +6,8 @@
 
 import { NextRequest } from 'next/server';
 import path from 'node:path';
+import { readFile, writeFile, rename, unlink } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { validBirth, findLocalSample, TOPICS } from '@/lib/v4-lookup';
 
 export const runtime = 'nodejs';
@@ -103,47 +105,71 @@ const SYSTEM_PROMPT = `你是精通倪海厦《天纪》紫微斗数体系的专
 5. 涉及健康只作养生提示，不作医疗诊断。
 6. 不编造、不引用无法核实的古籍原文。`;
 
-/** 调用 OpenAI 兼容接口，流式转发 */
-async function streamFromLLM(messages: { role: string; content: string }[], send: (t: string) => void) {
-  const baseUrl = process.env.MODEL_BASE_URL;
-  const apiKey = process.env.MODEL_API_KEY;
-  const model = process.env.MODEL_DEFAULT || 'agnes-3.0-flash';
-  if (!baseUrl || !apiKey) throw new Error('未配置 MODEL_BASE_URL / MODEL_API_KEY');
+// 单 Node 进程内串行；不同进程不得共享此额度文件。
+const quotaState = globalThis as typeof globalThis & { ziweiQuotaQueue?: Promise<void> };
+async function reserveQuota(file: string, limit: number): Promise<boolean> {
+  const previous = quotaState.ziweiQuotaQueue || Promise.resolve();
+  let release!: () => void;
+  quotaState.ziweiQuotaQueue = new Promise<void>(resolve => { release = resolve; });
+  await previous;
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    let count = 0;
+    try {
+      const value = JSON.parse(await readFile(file, 'utf8'));
+      if (typeof value.day !== 'string' || !Number.isSafeInteger(value.count) || value.count < 0) throw new Error('invalid quota');
+      count = value.day === day ? value.count : 0;
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') throw err;
+    }
+    if (count >= limit) return false;
+    const temp = `${file}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temp, JSON.stringify({ day, count: count + 1 }), { mode: 0o600, flag: 'wx' });
+      await rename(temp, file);
+    } finally { await unlink(temp).catch(() => {}); }
+    return true;
+  } finally { release(); }
+}
 
+function boundedEnv(name: string, fallback: number, max: number): number {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? Math.min(value, max) : fallback;
+}
+
+async function streamFromLLM(messages: { role: string; content: string }[], send: (t: string) => void, signal: AbortSignal) {
+  const baseUrl = process.env.MODEL_BASE_URL!;
   const res = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model, messages, stream: true, temperature: 0.7 }),
+    method: 'POST', signal,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.MODEL_API_KEY}` },
+    body: JSON.stringify({ model: 'gpt-6.1-terra', messages, stream: true, reasoning_effort: 'none', max_completion_tokens: boundedEnv('AI_MAX_OUTPUT_TOKENS', 1200, 2000) }),
   });
-
-  if (!res.ok || !res.body) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`模型接口返回 ${res.status} ${detail.slice(0, 200)}`);
-  }
-
+  if (!res.ok || !res.body) throw new Error('provider unavailable');
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const parts = buf.split('\n');
-    buf = parts.pop() || '';
-    for (const line of parts) {
-      const t = line.trim();
-      if (!t.startsWith('data:')) continue;
-      const payload = t.slice(5).trim();
-      if (payload === '[DONE]') return;
-      try {
-        const json = JSON.parse(payload);
-        const delta = json.choices?.[0]?.delta?.content ?? json.delta?.text ?? '';
-        if (delta) send(delta);
-      } catch {
-        /* 忽略无法解析的片段 */
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buf += decoder.decode(value, { stream: !done });
+      const parts = buf.split('\n');
+      buf = parts.pop() || '';
+      if (done && buf) parts.push(buf);
+      for (const line of parts) {
+        const t = line.trim();
+        if (!t.startsWith('data:')) continue;
+        const payload = t.slice(5).trim();
+        if (payload === '[DONE]') return;
+        try {
+          const json = JSON.parse(payload);
+          const delta = json.choices?.[0]?.delta?.content ?? '';
+          if (typeof delta === 'string' && delta) send(delta);
+        } catch { /* ignore malformed provider event */ }
       }
+      if (done) throw new Error('incomplete provider stream');
+      if (buf.length > 65536) throw new Error('provider event too large');
     }
-  }
+  } finally { await reader.cancel().catch(() => {}); }
 }
 
 /** 把长文本切成小段模拟流式输出 */
@@ -154,92 +180,79 @@ async function streamLocalText(text: string, send: (t: string) => void) {
 
 export async function POST(req: NextRequest) {
   let body: any;
+  const maxBytes = 100000;
+  const declared = Number(req.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) return new Response('请求过大', { status: 413 });
   try {
-    body = await req.json();
-  } catch {
-    return new Response(JSON.stringify({ error: '请求体解析失败' }), { status: 400 });
-  }
-
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return new Response(JSON.stringify({ error: '请求体格式无效' }), { status: 400 });
-  if (body.topic !== undefined && (typeof body.topic !== 'string' || !TOPICS.includes(body.topic))) {
-    return new Response(JSON.stringify({ error: '无效的主题' }), { status: 400 });
-  }
-  const requestedTopic: string | undefined = body.topic;
+    if (!req.body) return new Response('请求体解析失败', { status: 400 });
+    const reader = req.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) { await reader.cancel(); return new Response('请求过大', { status: 413 }); }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    body = JSON.parse(new TextDecoder().decode(bytes));
+  } catch { return new Response('请求体解析失败', { status: 400 }); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return new Response('请求体格式无效', { status: 400 });
+  if (body.mode !== undefined && !['local', 'ai'].includes(body.mode)) return new Response('无效的模式', { status: 400 });
+  if (body.topic !== undefined && (typeof body.topic !== 'string' || !TOPICS.includes(body.topic))) return new Response('无效的主题', { status: 400 });
+  const mode = body.mode || 'local'; // 旧客户端不会触发付费请求
   const chart = body.chart;
-  const messages: { role: string; content: string }[] = Array.isArray(body.messages) ? body.messages.filter((m: any) => m && ['user', 'assistant'].includes(m.role) && typeof m.content === 'string').slice(-20) : [];
-  const birth: BirthInfo | undefined = chart?.birthInfo;
-
-  const lastUser = [...messages].reverse().find((m) => m.role === 'user');
-  const question = lastUser?.content || '';
-  const isFirst = messages.filter((m) => m.role === 'user').length <= 1;
-
+  const rawLastUser = Array.isArray(body.messages) ? [...body.messages].reverse().find((m: any) => m?.role === 'user') : undefined;
+  if (mode === 'ai' && (!rawLastUser || typeof rawLastUser.content !== 'string' || !rawLastUser.content.trim() || rawLastUser.content.length > 4000)) return new Response('请输入不超过 4000 字的追问。', { status: 400 });
+  const messages: { role: 'user' | 'assistant'; content: string }[] = Array.isArray(body.messages)
+    ? body.messages.filter((m: any) => m && ['user', 'assistant'].includes(m.role) && typeof m.content === 'string' && m.content.length <= 4000).slice(-10)
+    : [];
+  const question = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+  const abort = new AbortController();
+  const onAbort = () => abort.abort();
+  req.signal.addEventListener('abort', onAbort, { once: true });
   const encoder = new TextEncoder();
+  let cancelled = false;
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (t: string) => controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta: { text: t } })}\n\n`));
-      const sendNote = (t: string) => send(t);
+      const send = (t: string) => { if (!cancelled) controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta: { text: t } })}\n\n`)); };
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        let handled = false;
-        let generatedByModel = false;
-
-        if (validBirth(birth)) {
-          const topics = await findLocalSample(birth as BirthInfo, DATA_DIR);
-          if (!topics) { send('本地 v4 数据缺少该出生信息的记录，请重新准备数据。'); return; }
-          if (topics) {
-            if (requestedTopic) {
-              await streamLocalText(topics[requestedTopic], send);
-              handled = true;
-            } else if (isFirst && !matchTopic(question)) {
-              await streamLocalText(topics.overview || '', send);
-              handled = true;
-            } else {
-              const topic = matchTopic(question);
-              if (topic && topics[topic]) {
-                await streamLocalText(topics[topic], send);
-                handled = true;
-              } else if (!process.env.MODEL_BASE_URL || !process.env.MODEL_API_KEY) {
-                send('当前为本地解读模式，可按出生信息查看已生成的 13 个主题。此类自由追问暂不支持，请选择上方主题查看对应解读。');
-                return;
-              } else if (topics.overview) {
-                // 追问匹配不上主题时，把本地 13 篇作为知识交给大模型作答
-                const context = Object.entries(TOPIC_LABELS)
-                  .map(([k, label]) => `### ${label}\n${topics[k] || ''}`)
-                  .join('\n\n');
-                await streamFromLLM(
-                  [
-                    { role: 'system', content: SYSTEM_PROMPT },
-                    {
-                      role: 'user',
-                      content: `这是该命主已生成的完整命理解读，请严格基于它来回答追问，不要另起炉灶：\n\n${context}\n\n命盘结构：\n${chartToText(chart)}\n\n用户追问：${question}`,
-                    },
-                  ],
-                  send,
-                );
-                handled = true;
-                generatedByModel = true;
-              }
-            }
-            if (generatedByModel) sendNote('\n\n---\n*（此回答由模型基于本地 v4 资料生成）*');
-          }
+        const birth: BirthInfo | undefined = chart?.birthInfo;
+        if (!validBirth(birth)) { send('出生信息无效或不在本地 v4 数据覆盖范围 1950–2026 年。'); return; }
+        const topics = await findLocalSample(birth as BirthInfo, DATA_DIR);
+        if (!topics) { send('本地 v4 数据缺少该出生信息的记录，请重新准备数据。'); return; }
+        if (mode === 'local') {
+          const topic = body.topic || matchTopic(question) || 'overview';
+          await streamLocalText(topics[topic] || '', send);
+          return;
         }
-
-        if (!handled) {
-          send('出生信息无效或不在本地 v4 数据覆盖范围 1950–2026 年。');
+        if (!question.trim() || question.length > 4000) { send('请输入不超过 4000 字的追问。'); return; }
+        const limit = boundedEnv('AI_DAILY_LIMIT', 0, 50);
+        const quotaFile = process.env.AI_QUOTA_FILE;
+        if (process.env.AI_ENABLED !== 'true' || !limit || !quotaFile || !path.isAbsolute(quotaFile) || !process.env.MODEL_BASE_URL || !process.env.MODEL_API_KEY || process.env.MODEL_DEFAULT !== 'gpt-6.1-terra') {
+          send('AI 自由追问暂未开放，请选择上方主题查看本地解读。'); return;
         }
-      } catch (err: any) {
-        send(`\n\n解读失败：${err?.message || '未知错误'}`);
+        if (!await reserveQuota(quotaFile, limit)) { send('今日 AI 追问额度已用完，请明天再试。'); return; }
+        if (abort.signal.aborted) return;
+        const relevant = matchTopic(question);
+        const context = ['overview', ...(relevant && relevant !== 'overview' ? [relevant] : [])]
+          .map(k => `### ${TOPIC_LABELS[k]}\n${(topics[k] || '').slice(0, 6000)}`).join('\n\n');
+        const history = messages.slice(-8).map(m => ({ role: m.role, content: m.content.slice(0, 2000) }));
+        timer = setTimeout(() => abort.abort(), boundedEnv('AI_TIMEOUT_MS', 30000, 55000));
+        await streamFromLLM([{ role: 'system', content: SYSTEM_PROMPT }, { role: 'system', content: `以下资料供参考：\n${context}\n\n命盘结构：\n${chartToText(chart).slice(0, 12000)}` }, ...history], send, abort.signal);
+      } catch {
+        if (!cancelled) send('\n\nAI 解读暂时不可用，请稍后重试。');
       } finally {
-        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-        controller.close();
+        if (timer) clearTimeout(timer);
+        req.signal.removeEventListener('abort', onAbort);
+        if (!cancelled) { controller.enqueue(encoder.encode('data: [DONE]\n\n')); controller.close(); }
       }
     },
+    cancel() { cancelled = true; abort.abort(); },
   });
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-    },
-  });
+  return new Response(stream, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' } });
 }

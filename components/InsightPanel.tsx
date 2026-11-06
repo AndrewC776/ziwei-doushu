@@ -7,7 +7,10 @@ import type { TimeView } from './TimeNav';
 interface Message {
   role: 'user' | 'assistant';
   content: string;
-  hidden?: boolean; // don't show user bubble for auto/topic messages
+  hidden?: boolean;
+  excludeHistory?: boolean;
+  requestId?: number;
+  // don't show user bubble for auto/topic messages
 }
 
 interface SelectedSiHua {
@@ -209,6 +212,18 @@ export default function InsightPanel({ chart, selectedPalace, selectedSiHua }: I
   const scrollRef = useRef<HTMLDivElement>(null);
   const followStream = useRef(false);
   const revealResponseStart = useRef(true);
+  const requestRef = useRef<{ id: number; controller: AbortController } | null>(null);
+  const nextRequestId = useRef(0);
+  useEffect(() => {
+    setLoading(false);
+    return () => {
+      requestRef.current?.controller.abort();
+      requestRef.current = null;
+      nextRequestId.current++;
+      autoLoaded.current = false;
+      loadingRef.current = false;
+    };
+  }, [chart]);
 
   // Keep refs in sync
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -297,15 +312,17 @@ ${selectedSiHua.starName}化${selectedSiHua.siHua}落在【${palaceName}】，�
 **【实际建议】**
 基于此四化的具体可操作建议。`;
 
-    sendMessage(prompt, true);
+    sendMessage(prompt, true, PALACE_TOPICS[palaceName.replace(/宫$/, '')] || 'overview');
   }, [selectedSiHua]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const streamResponse = async (apiMessages: { role: 'user' | 'assistant'; content: string }[], topic?: string) => {
+  const streamResponse = async (apiMessages: { role: 'user' | 'assistant'; content: string }[], requestId: number, controller: AbortController, topic?: string) => {
+    const current = () => nextRequestId.current === requestId;
     try {
       const res = await fetch('/api/interpret', {
         method: 'POST',
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chart, messages: apiMessages, topic }),
+        body: JSON.stringify({ chart, messages: apiMessages, topic, mode: topic ? 'local' : 'ai' }),
       });
       if (!res.ok) throw new Error('请求失败');
       if (!res.body) throw new Error('无响应流');
@@ -313,33 +330,52 @@ ${selectedSiHua.starName}化${selectedSiHua.siHua}落在【${palaceName}】，�
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let assistantText = '';
+      let buffer = '';
+      let finished = false;
 
-      setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+      if (!current()) return;
+      setMessages(prev => current() ? [...prev, { role: 'assistant', content: '', requestId, excludeHistory: Boolean(topic) }] : prev);
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        for (const line of chunk.split('\n')) {
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const data = line.slice(6);
-          if (data === '[DONE]') break;
+          if (data.trim() === '[DONE]') { finished = true; break; }
           try {
             const delta = JSON.parse(data).delta?.text ?? '';
             assistantText += delta;
             setMessages(prev => {
+              if (!current()) return prev;
               const updated = [...prev];
-              updated[updated.length - 1] = { role: 'assistant', content: assistantText };
+              updated[updated.length - 1] = { role: 'assistant', content: assistantText, requestId, excludeHistory: Boolean(topic) || /AI 自由追问暂未开放|今日 AI 追问额度已用完|AI 解读暂时不可用/.test(assistantText) };
               return updated;
             });
           } catch { /* skip */ }
         }
+        if (finished) break;
       }
+      if (!finished) throw new Error('incomplete stream');
+      const failed = /AI 自由追问暂未开放|今日 AI 追问额度已用完|AI 解读暂时不可用/.test(assistantText);
+      if (current() && !topic && !failed) setMessages(prev => current() ? prev.map(m => m.requestId === requestId ? { ...m, excludeHistory: false } : m) : prev);
     } catch {
-      setMessages(prev => [...prev, { role: 'assistant', content: '解读失败，请稍后重试。' }]);
+      if (!current()) return;
+      setMessages(prev => {
+        if (!current()) return prev;
+        const updated = prev.map(m => m.requestId === requestId ? { ...m, excludeHistory: true } : m);
+        if (updated.at(-1)?.role === 'assistant') updated[updated.length - 1] = { ...updated[updated.length - 1], excludeHistory: true };
+        return [...updated, { role: 'assistant', content: '解读失败，请稍后重试。', excludeHistory: true }];
+      });
     } finally {
-      setLoading(false);
-      loadingRef.current = false;
+      if (current()) {
+        requestRef.current = null;
+        setLoading(false);
+        loadingRef.current = false;
+      }
     }
   };
 
@@ -350,16 +386,19 @@ ${selectedSiHua.starName}化${selectedSiHua.siHua}落在【${palaceName}】，�
     revealResponseStart.current = hidden;
     setLoading(true);
 
-    const userMsg: Message = { role: 'user', content: text, hidden };
+    const requestId = ++nextRequestId.current;
+    const controller = new AbortController();
+    requestRef.current = { id: requestId, controller };
+    const userMsg: Message = { role: 'user', content: text, hidden, requestId, excludeHistory: true };
     // Capture current messages synchronously via ref (avoids stale closure)
-    const apiMessages = [...messagesRef.current, userMsg].map(m => ({
+    const apiMessages = [...messagesRef.current.filter(m => !m.hidden && !m.excludeHistory), ...(!hidden ? [userMsg] : [])].map(m => ({
       role: m.role,
       content: m.content,
     }));
 
     setMessages(prev => [...prev, userMsg]);
     setInput('');
-    streamResponse(apiMessages, topic);
+    streamResponse(apiMessages, requestId, controller, hidden ? (topic || 'overview') : undefined);
   };
 
   const handleTopicClick = (topicKey: string) => {
@@ -452,7 +491,7 @@ ${selectedSiHua.starName}化${selectedSiHua.siHua}落在【${palaceName}】，�
                   style={{ color: 'var(--t-faint)' }}
                 >
                   <span style={{ color: 'var(--t-gold)', opacity: 0.4 }}>✦</span>
-                  命理解读
+                  {i > 0 && !messages[i - 1]?.hidden ? 'AI 追问' : '本地解读'}
                 </div>
                 <AiContent text={msg.content} streaming={loading && isLastMsg} />
               </motion.div>
@@ -469,7 +508,8 @@ ${selectedSiHua.starName}化${selectedSiHua.siHua}落在【${palaceName}】，�
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
-            placeholder="继续追问，如：今年适合换工作吗？"
+            maxLength={2000}
+            placeholder="AI 自由追问，如：今年适合换工作吗？"
             disabled={loading}
             aria-label="继续追问"
             className="chart-insight-input flex-1 rounded-lg px-3 py-2 text-[11px] transition-colors"

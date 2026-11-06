@@ -64,7 +64,7 @@ test('palace selection sends an explicit local topic for all iztro names and lon
 
 test('interpret uses exact local data and handles unavailable free follow-ups without configuration leakage', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'ziwei-route-'));
-  const keys = ['ZIWEI_V4_DIR', 'MODEL_BASE_URL', 'MODEL_API_KEY', 'MODEL_DEFAULT'];
+  const keys = ['ZIWEI_V4_DIR', 'MODEL_BASE_URL', 'MODEL_API_KEY', 'MODEL_DEFAULT', 'AI_ENABLED', 'AI_DAILY_LIMIT', 'AI_QUOTA_FILE', 'AI_TIMEOUT_MS', 'AI_MAX_OUTPUT_TOKENS'];
   const saved = Object.fromEntries(keys.map(k => [k, process.env[k]]));
   const topics = ['overview', 'personality', 'love', 'career', 'wealth', 'health', 'family', 'children', 'move', 'friends', 'home', 'spirit', 'parents'];
   const birth = { year: 2000, month: 2, day: 29, hour: 11, gender: 'female' };
@@ -79,10 +79,10 @@ test('interpret uses exact local data and handles unavailable free follow-ups wi
   delete process.env.MODEL_BASE_URL;
   delete process.env.MODEL_API_KEY;
   const { POST } = loadSource('app/api/interpret/route.ts');
-  async function ask({ topic, messages = [{ role: 'user', content: '请解读' }], b = birth } = {}) {
+  async function ask({ topic, mode, messages = [{ role: 'user', content: '请解读' }], b = birth } = {}) {
     const response = await POST(new Request('http://localhost/api/interpret', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chart: { birthInfo: b }, messages, ...(topic ? { topic } : {}) }),
+      body: JSON.stringify({ chart: { birthInfo: b }, messages, ...(topic ? { topic } : {}), ...(mode ? { mode } : {}) }),
     }));
     const raw = await response.text();
     assert.match(raw, /data: \[DONE\]/);
@@ -97,30 +97,65 @@ test('interpret uses exact local data and handles unavailable free follow-ups wi
     assert.match(await ask(), /^source-11-overview/);
     assert.match(await ask({ topic: 'wealth', b: { ...birth, hour: 10 } }), /^source-10-wealth/);
     assert.doesNotMatch(await ask({ b: { ...birth, hour: 9 } }), /source-|MODEL_/);
-    const unsupported = await ask({ messages: followup });
-    assert.match(unsupported, /13.*主题/);
-    assert.match(unsupported, /追问.*暂不支持|暂不支持.*追问/);
+    const unsupported = await ask({ mode: 'ai', messages: followup });
+    assert.match(unsupported, /主题/);
+    assert.match(unsupported, /暂未开放/);
     assert.doesNotMatch(unsupported, /MODEL_|解读失败|source-|由模型|来自本地 v4 样本库/);
     process.env.MODEL_BASE_URL = 'http://127.0.0.1:1/v1';
-    assert.equal(await ask({ messages: followup }), unsupported, 'base URL alone does not enable the model');
+    assert.equal(await ask({ mode: 'ai', messages: followup }), unsupported, 'base URL alone does not enable the model');
     delete process.env.MODEL_BASE_URL;
     process.env.MODEL_API_KEY = 'test-only';
-    assert.equal(await ask({ messages: followup }), unsupported, 'API key alone does not enable the model');
+    assert.equal(await ask({ mode: 'ai', messages: followup }), unsupported, 'API key alone does not enable the model');
     // A local HTTP model stub verifies the configured branch with no provider access.
     let modelRequest;
+    let calls = 0;
+    let providerError = false;
     server = createServer(async (req, res) => {
+      calls++;
       let body = '';
       for await (const chunk of req) body += chunk;
       modelRequest = { url: req.url, body: JSON.parse(body) };
+      if (providerError) { res.writeHead(500); res.end('secret-provider-detail'); return; }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      res.end('data: {"choices":[{"delta":{"content":"local-stub-answer"}}]}\n\ndata: [DONE]\n\n');
+      res.write('data: {"choices":[{"delta":{"con');
+      setTimeout(() => res.end('tent":"local-stub-answer"}}]}\n\ndata: [DONE]\n\n'), 5);
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     process.env.MODEL_BASE_URL = `http://127.0.0.1:${server.address().port}/v1`;
     process.env.MODEL_API_KEY = 'test-only';
-    const answer = await ask({ messages: followup });
+    process.env.AI_ENABLED = 'true';
+    process.env.AI_DAILY_LIMIT = '1';
+    process.env.AI_QUOTA_FILE = path.join(dir, 'quota.json');
+    process.env.MODEL_DEFAULT = 'gpt-6.1-terra';
+    const oversized = await POST(new Request('http://localhost/api/interpret', { method: 'POST', body: 'x'.repeat(100001) }));
+    assert.equal(oversized.status, 413);
+    const unknown = await POST(new Request('http://localhost/api/interpret', { method: 'POST', body: JSON.stringify({ mode: 'unknown' }) }));
+    assert.equal(unknown.status, 400);
+    const longResponse = await POST(new Request('http://localhost/api/interpret', { method: 'POST', body: JSON.stringify({ mode: 'ai', chart: { birthInfo: birth }, messages: [...followup, { role: 'user', content: 'x'.repeat(4001) }] }) }));
+    assert.equal(longResponse.status, 400);
+    assert.equal(calls, 0);
+    assert.equal(await ask({ topic: 'career' }), 'source-11-career');
+    assert.equal(calls, 0);
+    const answer = await ask({ mode: 'ai', messages: [...followup.slice(0, -1), { role: 'user', content: '我的事业如何？' }] });
     assert.match(answer, /^local-stub-answer/);
-    assert.match(answer, /由模型基于本地 v4 资料生成/);
+    assert.equal(modelRequest.body.model, 'gpt-6.1-terra');
+    assert.equal(modelRequest.body.reasoning_effort, 'none');
+    assert.equal(modelRequest.body.messages.at(-1).content, '我的事业如何？');
+    assert.equal(modelRequest.body.messages.at(-2).content, '总览');
+    assert.match(await ask({ mode: 'ai', messages: followup }), /额度已用完/);
+    assert.equal(await ask({ topic: 'career' }), 'source-11-career');
+    assert.equal(calls, 1);
+    rmSync(process.env.AI_QUOTA_FILE);
+    const concurrent = await Promise.all([ask({ mode: 'ai', messages: followup }), ask({ mode: 'ai', messages: followup })]);
+    assert.equal(concurrent.filter(x => x.includes('local-stub-answer')).length, 1);
+    assert.equal(concurrent.filter(x => x.includes('额度已用完')).length, 1);
+    assert.equal(calls, 2);
+    rmSync(process.env.AI_QUOTA_FILE);
+    providerError = true;
+    const failed = await ask({ mode: 'ai', messages: followup });
+    assert.match(failed, /暂时不可用/);
+    assert.doesNotMatch(failed, /secret-provider-detail|MODEL_|test-only/);
+    assert.match(await ask({ mode: 'ai', messages: followup }), /额度已用完/);
     assert.equal(modelRequest.url, '/v1/chat/completions');
     assert.match(modelRequest.body.messages[1].content, /source-11-overview/);
   } finally {
