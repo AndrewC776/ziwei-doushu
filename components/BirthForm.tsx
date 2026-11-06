@@ -171,10 +171,9 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
     border: `1px solid ${inputBorder}`,
     color: inputClr,
     borderRadius: '14px',
-    padding: '10px 14px',
-    fontSize: '13px',
+    padding: 'var(--birth-input-padding, 10px 14px)',
+    fontSize: 'var(--birth-input-size, 13px)',
     width: '100%',
-    outline: 'none',
     transition: 'border-color 0.2s',
   } as React.CSSProperties;
 
@@ -202,11 +201,12 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
 
   return (
     <motion.form
+      className="birth-form"
       onSubmit={handleSubmit}
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
-      style={{ background: bg, border: `1px solid ${border}`, borderRadius: '24px', padding: '28px', backdropFilter: 'blur(20px)' }}
+      style={{ background: bg, border: `1px solid ${border}`, borderRadius: '24px', padding: 'var(--birth-form-padding, 28px)', backdropFilter: 'blur(20px)' }}
     >
       {/* 标题 */}
       <h3 style={{ color: goldText, fontSize: '12px', letterSpacing: '0.4em', textAlign: 'center', marginBottom: '20px', fontWeight: 500 }}>

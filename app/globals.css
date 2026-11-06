@@ -315,6 +315,96 @@ body {
   background-image: linear-gradient(160deg, #6a4206 0%, #9a6a10 40%, #6a4206 70%, #885010 100%);
 }
 
+/* /chart 引擎 Demo；组件旧版主题名在本页映射到全局设计 Token。 */
+.chart-demo-page {
+  --t-bg: var(--bg-0);
+  --t-surface: var(--bg-1);
+  --t-card: var(--bg-card);
+  --t-border: var(--bdr-med);
+  --t-gold: var(--ac);
+  --t-text: var(--tx-1);
+  --t-text2: var(--tx-2);
+  --t-faint: var(--tx-2);
+  margin: 0 auto;
+}
+.chart-demo-form-page { max-width: 720px; padding: 48px 20px; }
+.chart-demo-result-page { max-width: 1280px; padding: 24px 16px; }
+.chart-demo-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  align-items: start;
+  gap: 24px;
+}
+.chart-demo-workspace > * { min-width: 0; }
+.chart-demo-page :where(button, input, select, [role="button"], [tabindex]):focus-visible {
+  outline: 2px solid var(--ac);
+  outline-offset: 3px;
+}
+.chart-demo-page .chart-insight {
+  height: min(900px, calc(100dvh - 96px));
+  min-height: 480px;
+  border: 1px solid var(--bdr-med);
+  background: var(--bg-card);
+}
+.chart-demo-page .chart-insight-input { min-width: 0; }
+.chart-demo-page .chart-insight-content { overflow-wrap: anywhere; }
+.chart-demo-page .chart-palace-cell { min-width: 0; }
+.chart-demo-page .chart-palace-cell:focus-visible { outline-offset: -3px; }
+.chart-demo-page .chart-palace-heading { flex-wrap: wrap; }
+
+@media (max-width: 1023px) {
+  .chart-demo-workspace { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .chart-demo-page .chart-insight { height: auto; min-height: 0; }
+  .chart-demo-page .chart-insight-messages { flex: none; min-height: 240px; max-height: 70dvh; }
+}
+
+@media (max-width: 767px) {
+  .chart-demo-form-page { padding: 28px 16px; }
+  .chart-demo-result-page { padding: 16px 12px 28px; }
+  .chart-demo-page .birth-form {
+    --birth-form-padding: 20px 16px;
+    --birth-input-padding: 10px 9px;
+    --birth-input-size: 16px;
+  }
+  .chart-demo-page .birth-form :where(input, select) { min-width: 0; min-height: 44px; }
+  .chart-demo-page .birth-form input[type="checkbox"] { min-width: 20px; min-height: 20px; }
+  .chart-demo-page .birth-form label:has(input[type="checkbox"]) { min-height: 44px; }
+  .chart-demo-page .chart-time-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .chart-demo-page .chart-time-tab { min-height: 44px; font-size: 13px; white-space: nowrap; }
+  .chart-demo-page .chart-time-annual > .chart-time-tab { border: 1px solid transparent; border-radius: 8px; }
+  .chart-demo-page .chart-time-annual > .chart-time-tab[aria-pressed="true"] { background: var(--ac-bg); border-color: var(--ac-bdr); }
+  .chart-demo-page .chart-time-annual { display: contents; }
+  .chart-demo-page .chart-time-year-switch {
+    grid-column: 1 / -1;
+    justify-content: center;
+    gap: 12px;
+    padding-top: 4px;
+    border-top: 1px solid var(--bdr);
+  }
+  .chart-demo-page .chart-time-nav:not([data-view="liunian"]) .chart-time-year-switch { display: none; }
+  .chart-demo-page .chart-time-year-switch button { width: 44px; height: 44px; font-size: 20px; }
+  .chart-demo-page .chart-time-year-switch span { font-size: 14px; min-width: 48px; }
+  .chart-demo-page .chart-palace-cell { padding: 7px 5px; }
+  .chart-demo-page .chart-palace-major-row { flex-wrap: wrap; row-gap: 2px; }
+  .chart-demo-page .chart-palace-heading { padding-right: 0; padding-top: 14px; gap: 2px; }
+  .chart-demo-page .chart-palace-center { padding: 10px 5px; gap: 8px; }
+  .chart-demo-page .chart-palace-center > :first-child { font-size: 32px; }
+  .chart-demo-page .chart-insight-topics { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+  .chart-demo-page .chart-insight-topics button { min-height: 44px; font-size: 13px; }
+  .chart-demo-page .chart-insight-content > div,
+  .chart-demo-page .chart-insight-content > div > span { font-size: 14px; line-height: 1.8; }
+  .chart-demo-page .chart-insight-input { min-height: 44px; font-size: 16px; }
+  .chart-demo-page .chart-insight-input + button { min-height: 44px; font-size: 13px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-demo-page *, .chart-demo-page *::before, .chart-demo-page *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* ─── 命盘工作台响应式 ─────────────────────────────────── */
 .chart-page-root {
   min-height: 100vh;

@@ -88,7 +88,7 @@ export default function ChartBoard({ chart, onStarSelect, onPalaceSelect, onSiHu
   const sanFangSet = sanFangBranches ? new Set(sanFangBranches) : null;
 
   return (
-    <div className="w-full select-none">
+    <div className="chart-board w-full select-none">
       {/* 时间导航轴 */}
       <TimeNav
         chart={chart}
@@ -114,9 +114,9 @@ export default function ChartBoard({ chart, onStarSelect, onPalaceSelect, onSiHu
 
       {/* 4x4 命盘网格（含 SVG 叠加层） */}
       <div
-        className="grid rounded-xl overflow-hidden relative"
+        className="chart-palace-grid grid rounded-xl overflow-hidden relative"
         style={{
-          gridTemplateColumns: 'repeat(4, 1fr)',
+          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
           gridTemplateRows: 'repeat(4, auto)',
           gap: '1px',
           background: 'var(--t-border)',
@@ -150,7 +150,7 @@ export default function ChartBoard({ chart, onStarSelect, onPalaceSelect, onSiHu
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ delay: 0.5 }}
-          className="flex flex-col items-center justify-center p-4 gap-3"
+          className="chart-palace-center flex flex-col items-center justify-center p-4 gap-3"
           style={{ gridRow: '2 / 4', gridColumn: '2 / 4', background: 'var(--t-bg)' }}
         >
           <div className="text-5xl select-none leading-none" style={{ color: 'var(--t-gold)', opacity: 0.12, filter: 'drop-shadow(0 0 12px rgba(180,120,30,0.15))' }}>

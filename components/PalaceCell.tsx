@@ -70,7 +70,17 @@ export default function PalaceCell({
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.35, delay, ease: 'easeOut' }}
       onClick={onClick}
-      className="relative flex flex-col p-1.5 cursor-pointer transition-all duration-200 h-full"
+      role="button"
+      tabIndex={0}
+      aria-label={name.endsWith('宫') ? name : `${name}宫`}
+      aria-pressed={isSelected}
+      onKeyDown={event => {
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          onClick?.();
+        }
+      }}
+      className="chart-palace-cell relative flex flex-col p-1.5 cursor-pointer transition-all duration-200 h-full"
       style={{
         minHeight: '90px',
         background: isCurrentDaXian
@@ -104,7 +114,7 @@ export default function PalaceCell({
       )}
 
       {/* 宫名行 */}
-      <div className="flex items-center gap-1 mb-0.5 pr-8">
+      <div className="chart-palace-heading flex items-center gap-1 mb-0.5 pr-8">
         <span className={clsx('text-[10px] font-medium tracking-wide',
           isMingGong ? 'text-amber-500' : isShenGong ? 'text-sky-500' : ''
         )}
@@ -133,7 +143,7 @@ export default function PalaceCell({
           return (
             <div
               key={star.name}
-              className="flex items-center"
+              className="chart-palace-major-row flex items-center"
               onClick={e => { e.stopPropagation(); onStarClick?.(star); }}
             >
               <span className={clsx(

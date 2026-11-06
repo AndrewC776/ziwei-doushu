@@ -3,7 +3,6 @@ import { useState } from 'react';
 import BirthForm from '@/components/BirthForm';
 import ChartBoard from '@/components/ChartBoard';
 import InsightPanel from '@/components/InsightPanel';
-import TimeNav, { type TimeView } from '@/components/TimeNav';
 import { generateChart } from '@/lib/ziwei/algorithm';
 import type { BirthInfo, ZiweiChart, Palace } from '@/lib/ziwei/types';
 
@@ -20,13 +19,11 @@ import type { BirthInfo, ZiweiChart, Palace } from '@/lib/ziwei/types';
 export default function ChartPage() {
   const [chart, setChart] = useState<ZiweiChart | null>(null);
   const [selectedPalace, setSelectedPalace] = useState<Palace | null>(null);
-  const [view, setView] = useState<TimeView>('mingpan');
-  const [liunianYear, setLiunianYear] = useState(() => new Date().getFullYear());
 
   // ── 未起盘：展示出生信息表单 ──
   if (!chart) {
     return (
-      <main style={{ maxWidth: 720, margin: '0 auto', padding: '48px 20px' }}>
+      <main className="chart-demo-page chart-demo-form-page">
         <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 8 }}>紫微斗数排盘</h1>
         <p style={{ color: '#888', marginBottom: 32, fontSize: 14, lineHeight: 1.7 }}>
           输入出生年月日时，开源排盘引擎即时生成命盘。
@@ -40,7 +37,7 @@ export default function ChartPage() {
 
   // ── 已起盘：命盘 + 解读 ──
   return (
-    <main style={{ maxWidth: 1280, margin: '0 auto', padding: '24px 16px' }}>
+    <main className="chart-demo-page chart-demo-result-page">
       <button
         type="button"
         onClick={() => { setChart(null); setSelectedPalace(null); }}
@@ -52,21 +49,7 @@ export default function ChartPage() {
         ← 重新起盘
       </button>
 
-      <TimeNav
-        chart={chart}
-        view={view}
-        liunianYear={liunianYear}
-        onViewChange={setView}
-        onYearChange={setLiunianYear}
-      />
-
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 380px)',
-          gap: 20, marginTop: 16, alignItems: 'start',
-        }}
-      >
+      <div className="chart-demo-workspace">
         <ChartBoard chart={chart} onPalaceSelect={setSelectedPalace} />
         <InsightPanel chart={chart} selectedPalace={selectedPalace} />
       </div>

@@ -162,7 +162,7 @@ const PALACE_TOPICS: Record<string, string> = {
 function AiContent({ text, streaming }: { text: string; streaming?: boolean }) {
   const lines = text.split('\n');
   return (
-    <div className="space-y-0.5">
+    <div className="chart-insight-content space-y-0.5">
       {lines.map((line, i) => {
         const sectionMatch = line.match(/^\*\*【(.+?)】\*\*$/);
         if (sectionMatch) {
@@ -207,15 +207,26 @@ export default function InsightPanel({ chart, selectedPalace, selectedSiHua }: I
   const lastPalaceBranch = useRef<number | undefined>(undefined);
   const lastSiHuaKey = useRef<string | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const followStream = useRef(false);
+  const revealResponseStart = useRef(true);
 
   // Keep refs in sync
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { loadingRef.current = loading; }, [loading]);
 
-  // Auto-scroll
+  // Automatic topics open at the response heading; manual chat follows the stream.
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const container = scrollRef.current;
+    if (!container) return;
+    if (followStream.current) {
+      container.scrollTop = container.scrollHeight;
+    } else if (revealResponseStart.current && messages.at(-1)?.role === 'assistant' && messages.at(-1)?.content) {
+      const responses = container.querySelectorAll<HTMLElement>('[data-insight-response]');
+      const response = responses.item(responses.length - 1);
+      if (response) {
+        container.scrollTop += response.getBoundingClientRect().top - container.getBoundingClientRect().top - 16;
+        revealResponseStart.current = false;
+      }
     }
   }, [messages]);
 
@@ -335,6 +346,8 @@ ${selectedSiHua.starName}化${selectedSiHua.siHua}落在【${palaceName}】，�
   const sendMessage = (text: string, hidden = false, topic?: string) => {
     if (!text.trim() || loadingRef.current) return;
     loadingRef.current = true;
+    followStream.current = !hidden;
+    revealResponseStart.current = hidden;
     setLoading(true);
 
     const userMsg: Message = { role: 'user', content: text, hidden };
@@ -360,16 +373,18 @@ ${selectedSiHua.starName}化${selectedSiHua.siHua}落在【${palaceName}】，�
   };
 
   return (
-    <div className="flex flex-col h-full rounded-xl overflow-hidden card-glass">
+    <div className="chart-insight flex flex-col h-full rounded-xl overflow-hidden card-glass">
 
       {/* ── Topic buttons ── */}
       <div className="flex-shrink-0 px-2 pt-2.5 pb-2" style={{ borderBottom: '1px solid var(--t-border)' }}>
-        <div className="grid grid-cols-6 gap-1">
+        <div className="chart-insight-topics grid grid-cols-6 gap-1">
           {TOPICS.map(t => {
             const isActive = activeTopic === t.key;
             return (
               <button
                 key={t.key}
+                type="button"
+                aria-pressed={isActive}
                 onClick={() => handleTopicClick(t.key)}
                 disabled={loading}
                 className="py-1.5 text-[10px] font-medium rounded-lg transition-all duration-150 disabled:opacity-40"
@@ -387,7 +402,7 @@ ${selectedSiHua.starName}化${selectedSiHua.siHua}落在【${palaceName}】，�
       </div>
 
       {/* ── Messages ── */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
+      <div ref={scrollRef} className="chart-insight-messages flex-1 overflow-y-auto p-4 space-y-4 min-h-0" role="region" aria-label="命理解读" tabIndex={0}>
 
         {/* Loading state before first message */}
         {messages.length === 0 && (
@@ -428,6 +443,7 @@ ${selectedSiHua.starName}化${selectedSiHua.siHua}落在【${palaceName}】，�
             return (
               <motion.div
                 key={i}
+                data-insight-response
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
               >
@@ -455,7 +471,8 @@ ${selectedSiHua.starName}化${selectedSiHua.siHua}落在【${palaceName}】，�
             onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
             placeholder="继续追问，如：今年适合换工作吗？"
             disabled={loading}
-            className="flex-1 rounded-lg px-3 py-2 text-[11px] focus:outline-none transition-colors"
+            aria-label="继续追问"
+            className="chart-insight-input flex-1 rounded-lg px-3 py-2 text-[11px] transition-colors"
             style={{
               background: 'var(--t-card)',
               border: '1px solid var(--t-border)',

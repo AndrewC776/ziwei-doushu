@@ -74,10 +74,12 @@ export default function TimeNav({
   const overlayInfo = getOverlayInfo();
 
   return (
-    <div className="mb-3">
+    <div className="chart-time-nav mb-3" data-view={view}>
       {/* Tab 行 */}
       <div
-        className="flex items-center rounded-xl p-1 gap-1"
+        className="chart-time-row flex items-center rounded-xl p-1 gap-1"
+        role="group"
+        aria-label="命盘时间视图"
         style={{ background: 'var(--t-surface)', border: '1px solid var(--t-border)' }}
       >
         {/* 本命 */}
@@ -98,7 +100,7 @@ export default function TimeNav({
 
         {/* 流年 — 含年份切换 */}
         <div
-          className="relative flex-1 flex items-center justify-center rounded-lg py-1.5 gap-1 transition-all duration-200"
+          className="chart-time-annual relative flex-1 flex items-center justify-center rounded-lg py-1.5 gap-1 transition-all duration-200"
           style={{
             background: view === 'liunian'
               ? 'rgba(212,168,67,0.12)'
@@ -109,15 +111,19 @@ export default function TimeNav({
           }}
         >
           <button
+            type="button"
+            aria-pressed={view === 'liunian'}
             onClick={() => onViewChange('liunian')}
-            className="text-[10px] font-medium flex-1 text-center"
+            className="chart-time-tab text-[10px] font-medium flex-1 text-center"
             style={{ color: view === 'liunian' ? 'var(--t-gold)' : 'var(--t-faint)' }}
           >
             流年
           </button>
           {/* 年份 +/- */}
-          <div className="flex items-center gap-0.5">
+          <div className="chart-time-year-switch flex items-center gap-0.5">
             <button
+              type="button"
+              aria-label="上一年"
               onClick={e => { e.stopPropagation(); onYearChange(liunianYear - 1); if (view !== 'liunian') onViewChange('liunian'); }}
               className="text-[9px] w-4 h-4 flex items-center justify-center rounded"
               style={{ color: 'var(--t-faint)' }}
@@ -132,6 +138,8 @@ export default function TimeNav({
               {liunianYear}
             </span>
             <button
+              type="button"
+              aria-label="下一年"
               onClick={e => { e.stopPropagation(); onYearChange(liunianYear + 1); if (view !== 'liunian') onViewChange('liunian'); }}
               className="text-[9px] w-4 h-4 flex items-center justify-center rounded"
               style={{ color: 'var(--t-faint)' }}
@@ -179,8 +187,10 @@ function TabButton({
 }) {
   return (
     <button
+      type="button"
+      aria-pressed={active}
       onClick={onClick}
-      className="flex-1 py-1.5 text-[10px] font-medium rounded-lg transition-all duration-200"
+      className="chart-time-tab flex-1 py-1.5 text-[10px] font-medium rounded-lg transition-all duration-200"
       style={{
         background: active ? 'rgba(212,168,67,0.12)' : 'transparent',
         color: active ? 'var(--t-gold)' : 'var(--t-faint)',
