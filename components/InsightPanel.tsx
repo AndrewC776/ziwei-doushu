@@ -151,6 +151,13 @@ const PALACE_ROLES: Record<string, string> = {
   '父母宫': '父母关系、文书契约',
 };
 
+// iztro uses short names (财帛、疾厄、仆役); also accept full palace names.
+const PALACE_TOPICS: Record<string, string> = {
+  命: 'overview', 兄弟: 'family', 夫妻: 'love', 子女: 'children',
+  财帛: 'wealth', 疾厄: 'health', 迁移: 'move', 仆役: 'friends',
+  交友: 'friends', 官禄: 'career', 田宅: 'home', 福德: 'spirit', 父母: 'parents',
+};
+
 /** Render AI markdown: **【Title】** → gold header, **bold** → strong */
 function AiContent({ text, streaming }: { text: string; streaming?: boolean }) {
   const lines = text.split('\n');
@@ -228,7 +235,8 @@ export default function InsightPanel({ chart, selectedPalace, selectedSiHua }: I
     const starDesc = majorStars.length > 0
       ? majorStars.map(s => `${s.name}${s.siHua ? '化' + s.siHua : ''}`).join('、')
       : '空宫（借对宫）';
-    const role = PALACE_ROLES[selectedPalace.name] ?? '';
+    const palaceKey = selectedPalace.name.replace(/宫$/, '');
+    const role = PALACE_ROLES[`${palaceKey === '仆役' ? '交友' : palaceKey}宫`] ?? '';
 
     const prompt = `请重点分析【${selectedPalace.name}】（主管：${role}），该宫主星为${starDesc}，按以下结构输出：
 
@@ -244,7 +252,7 @@ ${selectedPalace.name}在命盘中的意义，以及这种星曜配置的整体�
 **【实际建议】**
 基于此宫的具体建议。`;
 
-    sendMessage(prompt, true);
+    sendMessage(prompt, true, PALACE_TOPICS[palaceKey]);
   }, [selectedPalace]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 注入四化飞化分析

@@ -197,6 +197,9 @@ export async function POST(req: NextRequest) {
               if (topic && topics[topic]) {
                 await streamLocalText(topics[topic], send);
                 handled = true;
+              } else if (!process.env.MODEL_BASE_URL || !process.env.MODEL_API_KEY) {
+                send('当前为本地解读模式，可按出生信息查看已生成的 13 个主题。此类自由追问暂不支持，请选择上方主题查看对应解读。');
+                return;
               } else if (topics.overview) {
                 // 追问匹配不上主题时，把本地 13 篇作为知识交给大模型作答
                 const context = Object.entries(TOPIC_LABELS)
