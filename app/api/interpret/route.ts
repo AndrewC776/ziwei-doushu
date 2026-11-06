@@ -219,7 +219,7 @@ export async function POST(req: NextRequest) {
                 generatedByModel = true;
               }
             }
-            if (handled) sendNote(generatedByModel ? '\n\n---\n*（此回答由模型基于本地 v4 资料生成）*' : '\n\n---\n*（本条解读来自本地 v4 样本库）*');
+            if (generatedByModel) sendNote('\n\n---\n*（此回答由模型基于本地 v4 资料生成）*');
           }
         }
 

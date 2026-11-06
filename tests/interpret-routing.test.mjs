@@ -92,7 +92,7 @@ test('interpret uses exact local data and handles unavailable free follow-ups wi
   let server;
   try {
     for (const topic of topics) {
-      assert.equal(await ask({ topic }), `source-11-${topic}\n\n---\n*（本条解读来自本地 v4 样本库）*`);
+      assert.equal(await ask({ topic }), `source-11-${topic}`);
     }
     assert.match(await ask(), /^source-11-overview/);
     assert.match(await ask({ topic: 'wealth', b: { ...birth, hour: 10 } }), /^source-10-wealth/);
